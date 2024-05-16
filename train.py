@@ -109,7 +109,7 @@ def create_training_options():
     os.makedirs(opt.ckpt_path, exist_ok=True)
 
     if opt.ckpt is not None:
-        ckpt_file = opt.ckpt_path / opt.ckpt / "latest.pt"
+        ckpt_file = opt.ckpt_path / opt.ckpt 
         assert ckpt_file.exists()
         opt.load = ckpt_file
     else:

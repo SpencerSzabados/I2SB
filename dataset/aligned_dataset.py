@@ -29,7 +29,8 @@ def get_params( size,  resize_size,  crop_size):
     return {'crop_pos': (x, y), 'flip': flip}
  
 
-def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC,  flip=True, rotate = False, crop = True, totensor=True):
+def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC,  flip=False, rotate = False, crop = True, totensor=True):
+    k = random.randint(0,3)
     transform_list = []
     transform_list.append(transforms.Lambda(lambda img: __scale(img, crop_size, method)))
 
@@ -38,7 +39,7 @@ def get_transform(params,  resize_size,  crop_size, method=Image.BICUBIC,  flip=
     if totensor:
         transform_list.append(transforms.ToTensor())
     if rotate:
-        transform_list.append(transforms.Lambda(lambda img: torch.rot90(img, random.randint(0,3), dims=[-1,-2])))
+        transform_list.append(transforms.Lambda(lambda img: torch.rot90(img, k, dims=[-1,-2])))
     return transforms.Compose(transform_list)
 
 def get_tensor(normalize=True, toTensor=True):
@@ -80,7 +81,7 @@ class EdgesDataset(torch.utils.data.Dataset):
     During test time, you need to prepare a directory '/path/to/data/test'.
     """
 
-    def __init__(self, dataroot, train=True,  img_size=256, random_crop=False, random_flip=True, random_rotate=False):
+    def __init__(self, dataroot, train=True,  img_size=256, random_crop=False, random_flip=False, random_rotate=False):
         """Initialize this dataset class.
         Parameters:
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
@@ -125,7 +126,6 @@ class EdgesDataset(torch.utils.data.Dataset):
 
         # apply the same transform to both A and B
         params =  get_params(A.size, self.resize_size, self.crop_size)
-        
         transform_image = get_transform( params, self.resize_size, self.crop_size, crop =self.random_crop, flip=self.random_flip, rotate = self.random_rotate)
 
         A = transform_image(A)
@@ -149,7 +149,7 @@ class DIODE(torch.utils.data.Dataset):
     During test time, you need to prepare a directory '/path/to/data/test'.
     """
 
-    def __init__(self, dataroot, train=True,  img_size=256, random_crop=False, random_flip=True, down_sample_img_size = 0, cache_name='cache', disable_cache=False):
+    def __init__(self, dataroot, train=True,  img_size=256, random_crop=False, random_flip=False, down_sample_img_size = 0, cache_name='cache', disable_cache=False):
         """Initialize this dataset class.
         Parameters:
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions

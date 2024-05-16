@@ -19,6 +19,7 @@ from torch.optim import AdamW, lr_scheduler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from torch_ema import ExponentialMovingAverage
+import torchvision
 import torchvision.utils as tu
 
 
@@ -212,6 +213,10 @@ class Runner(object):
             # Update loss after micobatches have completed
             optimizer.step()
             ema.update()
+
+            del x0_batch
+            del x1_batch
+            torch.cuda.empty_cache()
             if sched is not None: sched.step()
 
             # -------- logging --------
@@ -231,7 +236,7 @@ class Runner(object):
                         "ema": ema.state_dict(),
                         "optimizer": optimizer.state_dict(),
                         "sched": sched.state_dict() if sched is not None else sched,
-                    }, opt.ckpt_path / "latest.pt")
+                    }, opt.ckpt_path / f"{it}.pt")
                     log.info(f"Saved latest({it=}) checkpoint to {opt.ckpt_path=}!")
                 if opt.distributed:
                     torch.distributed.barrier()
@@ -286,10 +291,11 @@ class Runner(object):
 
         log = self.log
         log.info(f"========== Evaluating model : iter={it} ==========")
+        torch.cuda.empty_cache()
 
         # Generate training sample
         # ---------------------------------------
-        num_samples = 4
+        num_samples = 5
 
         test_batch, test_cond, _ = next(iter(val_dataset))
         batch_size = len(test_batch)
@@ -297,8 +303,8 @@ class Runner(object):
         if num_samples > batch_size:
             num_samples = batch_size
 
-        test_batch = preprocess(test_batch)
-        test_cond = preprocess(test_cond)
+        test_batch = preprocess(test_batch[0:num_samples])
+        test_cond = preprocess(test_cond[0:num_samples])
 
         img_clean = test_batch
         img_corrupt = test_cond
@@ -323,40 +329,36 @@ class Runner(object):
         assert img_clean.shape == img_corrupt.shape == (batch, *xdim)
         assert xs.shape == pred_x0s.shape
         # assert y.shape == (batch,)
-        print(img_clean.shape)
-        print(img_corrupt.shape)
-        print(xs.shape)
-        print(pred_x0s.shape)
 
         img_recon = xs[:, 0, ...]
         pred_x0s = pred_x0s[:, 0,...]
 
         mae_T = RunningMean().to(opt.device)
         mse_T = RunningMean().to(opt.device)
-        ssim_T = ssim_measure(data_range=(-1,1))
+        ssim_T = ssim_measure(data_range=(-1,1)).to(opt.device)
         mse_T.update(torch.mean((img_recon.to(opt.device)-img_clean.to(opt.device))**2, dim=(1,2,3)))
         mae_T.update(torch.mean(torch.abs(img_recon.to(opt.device)-img_clean.to(opt.device)), dim=(1,2,3)))
-        ssim_T.update(img_recon, img_clean)
-        mse = mse_T.compute().item().detach().cpu()
-        mae = mae_T.compute().item().detach().cpu()
+        ssim_T.update(img_recon.to(opt.device), img_clean.to(opt.device))
+        mse = mse_T.compute().item()
+        mae = mae_T.compute().item()
         ssim_score = ssim_T.compute().item()
         print(f"MSE: {mse}, MAE: {mae}, SSIM: {ssim_score}")
 
         log.info(f"Generated recon trajectories: size={xs.shape}")
         log.info("Logging images ...")
-        img_clean = (img_clean[0]+1)/2.
-        img_clean = img_clean.permute(1,2,0).numpy()
-        img_corrupt = (img_corrupt[0]+1)/2.
-        img_corrupt = img_corrupt.permute(1,2,0).numpy()
-        img_recon = (img_recon[0]+1)/2.
-        img_recon = img_recon.permute(1,2,0).numpy()
-        pred_x0s = (pred_x0s[0]+1)/2.
-        pred_x0s = pred_x0s.permute(1,2,0).numpy()
-        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/clean_{}_{}_{}.png'.format(it, mae, ssim_score), img_clean)
-        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/currupt_{}_{}_{}.png'.format(it, mae, ssim_score), img_corrupt)
-        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/img_recon_{}_{}_{}.png'.format(it, mae, ssim_score), img_recon)
-        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/pred_x0s_{}_{}_{}.png'.format(it, mae, ssim_score), pred_x0s)
-        # plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/xs_{}_{}_{}.png'.format(it, mae, ssim_score), xs.reshape(-1, *xdim)[0].permute(1,2,0).numpy())
+
+        grid_img = torchvision.utils.make_grid(img_clean, nrow=num_samples, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, 'tmp_imgs/clean_{}_{}_{}.png'.format(it, mae, ssim_score))
+        grid_img = torchvision.utils.make_grid(img_corrupt, nrow=num_samples, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, 'tmp_imgs/currupt_{}_{}_{}.png'.format(it, mae, ssim_score))
+        grid_img = torchvision.utils.make_grid(img_recon, nrow=num_samples, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, 'tmp_imgs/img_recon_{}_{}_{}.png'.format(it, mae, ssim_score))
+        grid_img = torchvision.utils.make_grid(pred_x0s, nrow=num_samples, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, 'tmp_imgs/pred_x0s_{}_{}_{}.png'.format(it, mae, ssim_score))
+   
+        del mae_T
+        del mse_T
+        del ssim_T
 
         # Compute FID, MSE, MAE, SSIM
         # ---------------------------------------
