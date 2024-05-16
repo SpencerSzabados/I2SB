@@ -22,14 +22,15 @@ from torch.multiprocessing import Process
 
 from logger import Logger
 from distributed_util import init_processes
-from corruption import build_corruption
-from dataset import imagenet
 from i2sb import Runner, download_ckpt
 
 import colored_traceback.always
 from ipdb import set_trace as debug
 
-RESULT_DIR = Path("results")
+from dataset import load_data
+
+
+RESULT_DIR = Path("results") # TODO
 
 def set_seed(seed):
     # https://github.com/pytorch/pytorch/issues/7068
@@ -54,7 +55,9 @@ def create_training_options():
     # parser.add_argument("--amp",            action="store_true")
 
     # --------------- SB model ---------------
-    parser.add_argument("--image-size",     type=int,   default=256)
+    parser.add_argument("--image_size",     type=int,   default=256)
+    parser.add_argument("--data_image_size", type=int,  default=256)
+    parser.add_argument("--data_image_channels", type=int, default=3)
     parser.add_argument("--corrupt",        type=str,   default=None,        help="restoration task")
     parser.add_argument("--t0",             type=float, default=1e-4,        help="sigma start time in network parametrization")
     parser.add_argument("--T",              type=float, default=1.,          help="sigma end time in network parametrization")
@@ -69,9 +72,9 @@ def create_training_options():
     parser.add_argument("--add-x1-noise",   action="store_true",             help="add noise to conditional network")
 
     # --------------- optimizer and loss ---------------
-    parser.add_argument("--batch-size",     type=int,   default=256)
+    parser.add_argument("--batch_size",     type=int,   default=256)
     parser.add_argument("--microbatch",     type=int,   default=2,           help="accumulate gradient over microbatch until full batch-size")
-    parser.add_argument("--num-itr",        type=int,   default=1000000,     help="training iteration")
+    parser.add_argument("--num_itr",        type=int,   default=1000000,     help="training iteration")
     parser.add_argument("--lr",             type=float, default=5e-5,        help="learning rate")
     parser.add_argument("--lr-gamma",       type=float, default=0.99,        help="learning rate decay ratio")
     parser.add_argument("--lr-step",        type=int,   default=1000,        help="learning rate decay step size")
@@ -79,8 +82,9 @@ def create_training_options():
     parser.add_argument("--ema",            type=float, default=0.99)
 
     # --------------- path and logging ---------------
-    parser.add_argument("--dataset-dir",    type=Path,  default="/dataset",  help="path to LMDB dataset")
-    parser.add_argument("--log-dir",        type=Path,  default=".log",      help="path to log std outputs and writer data")
+    parser.add_argument("--dataset_dir",    type=Path,  default="/dataset",  help="path to LMDB dataset")
+    parser.add_argument("--dataset",        type=str,   default="")
+    parser.add_argument("--log_dir",        type=Path,  default=".log",      help="path to log std outputs and writer data")
     parser.add_argument("--log-writer",     type=str,   default=None,        help="log writer: can be tensorbard, wandb, or None")
     parser.add_argument("--wandb-api-key",  type=str,   default=None,        help="unique API key of your W&B account; see https://wandb.ai/authorize")
     parser.add_argument("--wandb-user",     type=str,   default=None,        help="user name of your W&B account")
@@ -126,27 +130,22 @@ def main(opt):
     if opt.seed is not None:
         set_seed(opt.seed + opt.global_rank)
 
-    # build imagenet dataset
-    train_dataset = imagenet.build_lmdb_dataset(opt, log, train=True)
-    val_dataset   = imagenet.build_lmdb_dataset(opt, log, train=False)
-    # note: images should be normalized to [-1,1] for corruption methods to work properly
-
-    if opt.corrupt == "mixture":
-        import corruption.mixture as mix
-        train_dataset = mix.MixtureCorruptDatasetTrain(opt, train_dataset)
-        val_dataset = mix.MixtureCorruptDatasetVal(opt, val_dataset)
-
-    # build corruption method
-    corrupt_method = build_corruption(opt, log)
+    # Custom dataloader
+    train_dataset, val_dataset = load_data(
+        data_dir=opt.dataset_dir,
+        dataset=opt.dataset,
+        batch_size=opt.batch_size,
+        image_size=opt.data_image_size,
+        num_channels=opt.data_image_channels,
+        num_workers=1,
+    )
 
     run = Runner(opt, log)
-    run.train(opt, train_dataset, val_dataset, corrupt_method)
+    run.train(opt, train_dataset, val_dataset)
     log.info("Finish!")
 
 if __name__ == '__main__':
     opt = create_training_options()
-
-    assert opt.corrupt is not None
 
     # one-time download: ADM checkpoint
     download_ckpt("data/")

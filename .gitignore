@@ -138,3 +138,5 @@ results/*
 .log/*
 .deprecated/*
 .debug/*
+
+/tmp_imgs/*
