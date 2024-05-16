@@ -47,6 +47,7 @@ def create_training_options():
     parser.add_argument("--seed",           type=int,   default=0)
     parser.add_argument("--name",           type=str,   default=None,        help="experiment ID")
     parser.add_argument("--ckpt",           type=str,   default=None,        help="resumed checkpoint name")
+    parser.add_argument("--ckpt_path", type=Path, default=None)
     parser.add_argument("--gpu",            type=int,   default=None,        help="set only if you wish to run on a particular device")
     parser.add_argument("--n-gpu-per-node", type=int,   default=1,           help="number of gpu on each node")
     parser.add_argument("--master-address", type=str,   default='localhost', help="address for master")
@@ -104,11 +105,11 @@ def create_training_options():
 
     # ========= path handle =========
     os.makedirs(opt.log_dir, exist_ok=True)
-    opt.ckpt_path = RESULT_DIR / opt.name
+
     os.makedirs(opt.ckpt_path, exist_ok=True)
 
     if opt.ckpt is not None:
-        ckpt_file = RESULT_DIR / opt.ckpt / "latest.pt"
+        ckpt_file = opt.ckpt_path / opt.ckpt / "latest.pt"
         assert ckpt_file.exists()
         opt.load = ckpt_file
     else:

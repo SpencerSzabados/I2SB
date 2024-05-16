@@ -236,7 +236,7 @@ class Runner(object):
                 if opt.distributed:
                     torch.distributed.barrier()
 
-            if it == 500 or (it > 0 and it % 10000 == 0): # 0, 0.5k, 3k, 6k 9k
+            if it == 500 or (it > 0 and it % 5000 == 0): # 0, 0.5k, 3k, 6k 9k
                 net.eval()
                 self.evaluation(opt, it, train_dataset, val_dataset)
                 net.train()
@@ -297,8 +297,8 @@ class Runner(object):
         if num_samples > batch_size:
             num_samples = batch_size
 
-        test_batch = preprocess(test_batch[0:num_samples])
-        test_cond = preprocess(test_cond[0:num_samples])
+        test_batch = preprocess(test_batch)
+        test_cond = preprocess(test_cond)
 
         img_clean = test_batch
         img_corrupt = test_cond
@@ -312,6 +312,7 @@ class Runner(object):
         )
 
         log.info("Collecting tensors ...")
+
         img_clean   = all_cat_cpu(opt, log, img_clean)
         img_corrupt = all_cat_cpu(opt, log, img_corrupt)
         # y           = all_cat_cpu(opt, log, y)
@@ -326,27 +327,36 @@ class Runner(object):
         print(img_corrupt.shape)
         print(xs.shape)
         print(pred_x0s.shape)
+
+        img_recon = xs[:, 0, ...]
+        pred_x0s = pred_x0s[:, 0,...]
+
+        mae_T = RunningMean().to(opt.device)
+        mse_T = RunningMean().to(opt.device)
+        ssim_T = ssim_measure(data_range=(-1,1))
+        mse_T.update(torch.mean((img_recon.to(opt.device)-img_clean.to(opt.device))**2, dim=(1,2,3)))
+        mae_T.update(torch.mean(torch.abs(img_recon.to(opt.device)-img_clean.to(opt.device)), dim=(1,2,3)))
+        ssim_T.update(img_recon, img_clean)
+        mse = mse_T.compute().item().detach().cpu()
+        mae = mae_T.compute().item().detach().cpu()
+        ssim_score = ssim_T.compute().item()
+        print(f"MSE: {mse}, MAE: {mae}, SSIM: {ssim_score}")
+
         log.info(f"Generated recon trajectories: size={xs.shape}")
-
-        def log_image(tag, img, nrow=10):
-            self.writer.add_image(it, tag, tu.make_grid((img+1)/2, nrow=nrow)) # [1,1] -> [0,1]
-
         log.info("Logging images ...")
-        img_clean = (img_clean+1)/2.
-        img_clean = img_clean[0].permute(1,2,0).numpy()
-        img_corrupt = (img_corrupt+1)/2.
-        img_corrupt = img_corrupt[0].permute(1,2,0).numpy()
-        img_recon = xs[0, 0, ...]
-        img_recon = (img_recon+1)/2.
+        img_clean = (img_clean[0]+1)/2.
+        img_clean = img_clean.permute(1,2,0).numpy()
+        img_corrupt = (img_corrupt[0]+1)/2.
+        img_corrupt = img_corrupt.permute(1,2,0).numpy()
+        img_recon = (img_recon[0]+1)/2.
         img_recon = img_recon.permute(1,2,0).numpy()
-        pred_x0s = pred_x0s[0 ,0,...]
-        pred_x0s = (pred_x0s+1)/2.
+        pred_x0s = (pred_x0s[0]+1)/2.
         pred_x0s = pred_x0s.permute(1,2,0).numpy()
-        plt.imsave('/u6/sszabado/models/I2SB/tmp_imgs/clean_{}.png'.format(it), img_clean)
-        plt.imsave('/u6/sszabado/models/I2SB/tmp_imgs/currupt_{}.png'.format(it), img_corrupt)
-        plt.imsave('/u6/sszabado/models/I2SB/tmp_imgs/img_recon_{}.png'.format(it), img_recon)
-        plt.imsave('/u6/sszabado/models/I2SB/tmp_imgs/pred_x0s_{}.png'.format(it), pred_x0s)
-        # plt.imsave('/u6/sszabado/models/I2SB/tmp_imgs/xs_{}.png'.format(it), xs.reshape(-1, *xdim)[0].permute(1,2,0).numpy())
+        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/clean_{}_{}_{}.png'.format(it, mae, ssim_score), img_clean)
+        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/currupt_{}_{}_{}.png'.format(it, mae, ssim_score), img_corrupt)
+        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/img_recon_{}_{}_{}.png'.format(it, mae, ssim_score), img_recon)
+        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/pred_x0s_{}_{}_{}.png'.format(it, mae, ssim_score), pred_x0s)
+        # plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/xs_{}_{}_{}.png'.format(it, mae, ssim_score), xs.reshape(-1, *xdim)[0].permute(1,2,0).numpy())
 
         # Compute FID, MSE, MAE, SSIM
         # ---------------------------------------
@@ -367,8 +377,8 @@ class Runner(object):
         #         xs = xs.cpu().detach()
         #         xs = xs.permute(0,2,3,1).numpy()
         #         for j in range(len(xs)):
-        #             plt.imsave('/u6/sszabado/checkpoints/i2sb/lysto64_random_crop_ddbm/fid_samples/image_{}.png'.format(i*opt.batch_size+j), xs[j]) # When generating multichannel data
-        #             # plt.imsave('fid/{}/image_{}.JPEG'.format("fid_samples", i*batch_size+j), samples[j,:,:,0], cmap='gray') # When generating single channel data
+        #             plt.imsave('/u6/sszabado/checkpoints/i2sb/lysto64_random_crop_ddbm/fid_samples/image_{}_{}_{}.png'.format(i*opt.batch_size+j), xs[j]) # When generating multichannel data
+        #             # plt.imsave('fid/{}/image_{}_{}_{}.JPEG'.format("fid_samples", i*batch_size+j), samples[j,:,:,0], cmap='gray') # When generating single channel data
         # print("\nfinished generating fid samples.", flush=True)
 
         # print("\ncomputing fid...")
@@ -393,53 +403,53 @@ class Runner(object):
         # np.save('/u6/sszabado/checkpoints/i2sb/lysto64_random_crop_ddbm/metrics/fid.npy', np.array(self.fids))
         # print(f"FID: {fid_value}")
 
-        print("Computing MSE, MSA, SSIM, loss...")
+        # print("Computing MSE, MSA, SSIM, loss...")
 
-        print(len(val_dataset))
+        # print(len(val_dataset))
 
-        ref_samples = []
-        samples = []
-        for i, (x1_batch, x0_batch, _) in enumerate(val_dataset):
-            x1_batch = preprocess(x1_batch)
-            x0_batch = preprocess(x0_batch)
-            xs, pred_x0s = self.ddpm_sampling(
-                    opt, x1_batch, mask=mask, cond=x0_batch, clip_denoise=True, verbose=opt.global_rank==0
-                )
-            xs = xs[:, 0, ...]
-            samples.append(all_cat_cpu(opt, log, xs))
-            ref_samples.append(all_cat_cpu(opt, log, x0_batch))
-            if i*opt.batch_size > 1500:
-                break
-        samples = torch.cat(samples, dim=0)
-        ref_samples = torch.cat(ref_samples, dim=0)
+        # ref_samples = []
+        # samples = []
+        # for i, (x1_batch, x0_batch, _) in enumerate(val_dataset):
+        #     x1_batch = preprocess(x1_batch)
+        #     x0_batch = preprocess(x0_batch)
+        #     xs, pred_x0s = self.ddpm_sampling(
+        #             opt, x1_batch, mask=mask, cond=x0_batch, clip_denoise=True, verbose=opt.global_rank==0
+        #         )
+        #     xs = xs[:, 0, ...]
+        #     samples.append(all_cat_cpu(opt, log, xs))
+        #     ref_samples.append(all_cat_cpu(opt, log, x0_batch))
+        #     if i*opt.batch_size > 1500:
+        #         break
+        # samples = torch.cat(samples, dim=0)
+        # ref_samples = torch.cat(ref_samples, dim=0)
 
-        mae_T = RunningMean()
-        mse_T = RunningMean()
-        ssim_T = ssim_measure(data_range=(-1,1))
-        # ssim_score = ssim_T(preds=samples, target=ref_samples).item()
-        samples_len = len(samples)
-        num_batches = samples_len//100
-        for i in range(0, num_batches):
-            s = i*100
-            e = min(s+100, samples_len)
-            mse_T.update(torch.mean((samples[s:e]-ref_samples[s:e])**2, dim=(1,2,3)))
-            mae_T.update(torch.mean(torch.abs(samples[s:e]-ref_samples[s:e]), dim=(1,2,3)))
-            ssim_T.update(samples[s:e], ref_samples[s:e])
-        mse = mse_T.compute().item()
-        mae = mae_T.compute().item()
-        ssim_score = ssim_T.compute().item()
+        # mae_T = RunningMean()
+        # mse_T = RunningMean()
+        # ssim_T = ssim_measure(data_range=(-1,1))
+        # # ssim_score = ssim_T(preds=samples, target=ref_samples).item()
+        # samples_len = len(samples)
+        # num_batches = samples_len//100
+        # for i in range(0, num_batches):
+        #     s = i*100
+        #     e = min(s+100, samples_len)
+        #     mse_T.update(torch.mean((samples[s:e]-ref_samples[s:e])**2, dim=(1,2,3)))
+        #     mae_T.update(torch.mean(torch.abs(samples[s:e]-ref_samples[s:e]), dim=(1,2,3)))
+        #     ssim_T.update(samples[s:e], ref_samples[s:e])
+        # mse = mse_T.compute().item()
+        # mae = mae_T.compute().item()
+        # ssim_score = ssim_T.compute().item()
         
-        self.MSE.append([it, mse])
-        self.MAE.append([it, mae])
-        self.SSIM.append([it, ssim_score])
-        os.makedirs('/home/sszabados/checkpoints/pix2pix/ct_pet/metrics/', exist_ok=True)
-        np.save('/home/sszabados/checkpoints/pix2pix/ct_pet/metrics/mse.npy', np.array(self.MSE))
-        os.makedirs('/home/sszabados/checkpoints/pix2pix/ct_pet/metrics/', exist_ok=True)
-        np.save('/home/sszabados/checkpoints/pix2pix/ct_pet/metrics/mae.npy', np.array(self.MAE))
-        os.makedirs('/home/sszabados/checkpoints/pix2pix/ct_pet/metrics/', exist_ok=True)
-        np.save('/home/sszabados/checkpoints/pix2pix/ct_pet/metrics/ssim.npy', np.array(self.SSIM))
+        # self.MSE.append([it, mse])
+        # self.MAE.append([it, mae])
+        # self.SSIM.append([it, ssim_score])
+        # os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
+        # np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/mse.npy', np.array(self.MSE))
+        # os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
+        # np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/mae.npy', np.array(self.MAE))
+        # os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
+        # np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/ssim.npy', np.array(self.SSIM))
 
-        print(f"MSE: {mse}, MAE: {mae}, SSIM: {ssim_score}")
+        # print(f"MSE: {mse}, MAE: {mae}, SSIM: {ssim_score}")
 
 
         log.info(f"========== Evaluation finished: iter={it} ==========")
