@@ -23,15 +23,27 @@ import torchvision.utils as tu
 
 from logger import Logger
 import distributed_util as dist_util
-from i2sb import Runner, download_ckpt
-from corruption import build_corruption
+from i2sb import Runner
 from dataset import imagenet
 from i2sb import ckpt_util
 
-import colored_traceback.always
-from ipdb import set_trace as debug
+
+from dataset import load_data
+from evaluations.fid_score import calculate_fid_given_paths
+import matplotlib.pyplot as plt
+from torchmetrics.image import StructuralSimilarityIndexMeasure as ssim_measure
+from torchmetrics.aggregation import RunningMean
+
 
 RESULT_DIR = Path("results")
+
+def preprocess(x):
+    """
+    Preprocessing function taken from train_util.py
+    """    
+    if x.shape[1] == 3:
+        x =  2.*x - 1.
+    return x
 
 def set_seed(seed):
     # https://github.com/pytorch/pytorch/issues/7068
@@ -135,25 +147,23 @@ def main(opt):
     log = Logger(opt.global_rank, ".log")
 
     # get (default) ckpt option
-    ckpt_opt = ckpt_util.build_ckpt_option(opt, log, RESULT_DIR / opt.ckpt)
+    ckpt_opt = ckpt_util.build_ckpt_option(opt, log, opt.ckpt_path)
     corrupt_type = ckpt_opt.corrupt
     nfe = opt.nfe or ckpt_opt.interval-1
 
-    # build corruption method
-    corrupt_method = build_corruption(opt, log, corrupt_type=corrupt_type)
-
-    # build imagenet val dataset
-    val_dataset = build_val_dataset(opt, log, corrupt_type)
-    n_samples = len(val_dataset)
-
-    # build dataset per gpu and loader
-    subset_dataset = build_subset_per_gpu(opt, val_dataset, log)
-    val_loader = DataLoader(subset_dataset,
-        batch_size=opt.batch_size, shuffle=False, pin_memory=True, num_workers=1, drop_last=False,
+    # Custom dataloader
+    train_dataset, val_dataset = load_data(
+        data_dir=opt.dataset_dir,
+        dataset=opt.dataset,
+        batch_size=opt.batch_size,
+        image_size=opt.data_image_size,
+        num_channels=opt.data_image_channels,
+        num_workers=1,
     )
 
     # build runner
     runner = Runner(ckpt_opt, log, save_opt=False)
+    runner.net.eval()
 
     # handle use_fp16 for ema
     if opt.use_fp16:
@@ -161,57 +171,115 @@ def main(opt):
         runner.net.diffusion_model.convert_to_fp16()
         runner.ema = ExponentialMovingAverage(runner.net.parameters(), decay=0.99) # re-init ema with fp16 weight
 
-    # create save folder
-    recon_imgs_fn = get_recon_imgs_fn(opt, nfe)
-    log.info(f"Recon images will be saved to {recon_imgs_fn}!")
+    # Compute FID, MSE, MAE, SSIM
+    # ---------------------------------------
+    print("Computing FID of model and L1 score")
+    # sample 50,000 images for computeing fid against train set
+    print("\nGenerating fid samples...", flush=True)
 
-    recon_imgs = []
-    ys = []
-    num = 0
-    for loader_itr, out in enumerate(val_loader):
+    num_batches = 50000//len(train_dataset)
+    for _ in range(num_batches):
+        for i, (x1_batch, x0_batch, _) in enumerate(train_dataset):
+            x1_batch = preprocess(x1_batch)
+            x0_batch = preprocess(x0_batch)
+            mask = None
+            y = None
+            cond = x1_batch if opt.cond_x1 else None
+            x1 = x0_batch
 
-        corrupt_img, x1, mask, cond, y = compute_batch(ckpt_opt, corrupt_type, corrupt_method, out)
+            xs, pred_x0s = runner.ddpm_sampling(
+                opt, x1_batch, mask=mask, cond=x0_batch, clip_denoise=True, verbose=opt.global_rank==0
+            )
+            print(xs.shape)
+            xs = xs[:, 0, ...]
+            xs = (xs+1.)/2.
+            xs = xs.cpu().detach()
+            xs = xs.permute(0,2,3,1).numpy()
+            for j in range(len(xs)):
+                plt.imsave('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/fid_samples/image_{}_{}_{}.png'.format(i*opt.batch_size+j), xs[j,...]) # When generating multichannel data
+                # plt.imsave('fid/{}/image_{}_{}_{}.JPEG'.format("fid_samples", i*batch_size+j), samples[j,:,:,0], cmap='gray') # When generating single channel data
+    dist.barrier()
+    print("\nfinished generating fid samples.", flush=True)
 
-        xs, _ = runner.ddpm_sampling(
-            ckpt_opt, x1, mask=mask, cond=cond, clip_denoise=opt.clip_denoise, nfe=nfe, verbose=opt.n_gpu_per_node==1
+    print("\ncomputing fid...")
+    dir2ref = "/home/sszabados/datasets/lysto64_random_crop_pix2pix/B/val/"
+    dir2gen = "/home/sszabados/checkpoints/i2sb/lysto64_random_crop/fid_samples/"
+    fid_value = 0
+    try:
+        fid_value = calculate_fid_given_paths(
+            paths = [dir2ref, dir2gen],
+            batch_size = 128,
+            device = "cuda:1",
+            img_size = 256,
+            dims = 2048,
+            num_workers = 1,
+            eqv = 'D4' 
         )
-        recon_img = xs[:, 0, ...].to(opt.device)
+    except ValueError:
+        fid_value = np.inf
+    # Incrementally save fids after each epoch
+    os.makedirs('/u6/sszabado/checkpoints/i2sb/lysto64_random_crop_ddbm/metrics/', exist_ok=True)
+    np.save('/u6/sszabado/checkpoints/i2sb/lysto64_random_crop_ddbm/metrics/fid.npy', np.array(fid_value))
+    print(f"FID: {fid_value}")
 
-        assert recon_img.shape == corrupt_img.shape
+    print("Computing MSE, MSA, SSIM, loss...")
 
-        if loader_itr == 0 and opt.global_rank == 0: # debug
-            os.makedirs(".debug", exist_ok=True)
-            tu.save_image((corrupt_img+1)/2, ".debug/corrupt.png")
-            tu.save_image((recon_img+1)/2, ".debug/recon.png")
-            log.info("Saved debug images!")
+    print(len(val_dataset))
 
-        # [-1,1]
-        gathered_recon_img = collect_all_subset(recon_img, log)
-        recon_imgs.append(gathered_recon_img)
+    ref_samples = []
+    samples = []
 
-        y = y.to(opt.device)
-        gathered_y = collect_all_subset(y, log)
-        ys.append(gathered_y)
+    for i, (x1_batch, x0_batch, _) in enumerate(val_dataset):
+        x1_batch = preprocess(x1_batch)
+        x0_batch = preprocess(x0_batch)
+        mask = None
+        y = None
+        cond = x1_batch if opt.cond_x1 else None
+        x1 = x0_batch
+        
+        xs, pred_x0s = runner.ddpm_sampling(
+                opt, x1_batch, mask=mask, cond=x0_batch, clip_denoise=True, verbose=opt.global_rank==0
+            )
+        xs = xs[:, 0, ...]
+        samples.append(runner.all_cat_cpu(opt, log, xs))
+        ref_samples.append(runner.all_cat_cpu(opt, log, x0_batch))
+        if i*opt.batch_size > 1500:
+            break
 
-        num += len(gathered_recon_img)
-        log.info(f"Collected {num} recon images!")
-        dist.barrier()
+    dist.barrier()
+    samples = torch.cat(samples, dim=0)
+    ref_samples = torch.cat(ref_samples, dim=0)
+
+    mae_T = RunningMean()
+    mse_T = RunningMean()
+    ssim_T = ssim_measure(data_range=(-1,1))
+    # ssim_score = ssim_T(preds=samples, target=ref_samples).item()
+    samples_len = len(samples)
+    num_batches = samples_len//100
+    for i in range(0, num_batches):
+        s = i*100
+        e = min(s+100, samples_len)
+        mse_T.update(torch.mean((samples[s:e]-ref_samples[s:e])**2, dim=(1,2,3)))
+        mae_T.update(torch.mean(torch.abs(samples[s:e]-ref_samples[s:e]), dim=(1,2,3)))
+        ssim_T.update(samples[s:e], ref_samples[s:e])
+    mse = mse_T.compute().item()
+    mae = mae_T.compute().item()
+    ssim_score = ssim_T.compute().item()
+    dist.barrier()
+    
+    os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
+    np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/mae.npy', np.array(mae))
+    os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
+    np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/ssim.npy', np.array(ssim_score))
+
+    print(f"MAE: {mae}, SSIM: {ssim_score}")
 
     del runner
-
-    arr = torch.cat(recon_imgs, axis=0)[:n_samples]
-    label_arr = torch.cat(ys, axis=0)[:n_samples]
-
-    if opt.global_rank == 0:
-        torch.save({"arr": arr, "label_arr": label_arr}, recon_imgs_fn)
-        log.info(f"Save at {recon_imgs_fn}")
-    dist.barrier()
-
-    log.info(f"Sampling complete! Collect recon_imgs={arr.shape}, ys={label_arr.shape}")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("--name",           type=str,   default=None,        help="experiment ID")
     parser.add_argument("--seed",           type=int,  default=0)
     parser.add_argument("--n-gpu-per-node", type=int,  default=1,           help="number of gpu on each node")
     parser.add_argument("--master-address", type=str,  default='localhost', help="address for master")
@@ -219,16 +287,25 @@ if __name__ == '__main__':
     parser.add_argument("--num-proc-node",  type=int,  default=1,           help="The number of nodes in multi node env")
 
     # data
-    parser.add_argument("--image-size",     type=int,  default=256)
-    parser.add_argument("--dataset-dir",    type=Path, default="/dataset",  help="path to LMDB dataset")
+    parser.add_argument("--image_size",     type=int,  default=256)
+    parser.add_argument("--data_image_size", type=int,  default=256)
+    parser.add_argument("--data_image_channels", type=int, default=3)
+    parser.add_argument("--dataset_dir",    type=Path, default="/dataset",  help="path to LMDB dataset")
+    parser.add_argument("--dataset",        type=str,   default="")
     parser.add_argument("--partition",      type=str,  default=None,        help="e.g., '0_4' means the first 25% of the dataset")
 
     # sample
-    parser.add_argument("--batch-size",     type=int,  default=32)
-    parser.add_argument("--ckpt",           type=str,  default=None,        help="the checkpoint name from which we wish to sample")
+    parser.add_argument("--interval",       type=int,   default=1000,        help="number of interval")
+    parser.add_argument("--batch_size",     type=int,  default=32)
+    parser.add_argument("--ckpt",           type=str,   default=None,        help="resumed checkpoint name")
+    parser.add_argument("--ckpt_path", type=Path, default=None)
+    parser.add_argument("--ot-ode",         action="store_true",             help="use OT-ODE model")
     parser.add_argument("--nfe",            type=int,  default=None,        help="sampling steps")
     parser.add_argument("--clip-denoise",   action="store_true",            help="clamp predicted image to [-1,1] at each")
     parser.add_argument("--use-fp16",       action="store_true",            help="use fp16 network weight for faster sampling")
+    parser.add_argument("--log_dir",        type=Path,  default=".log",      help="path to log std outputs and writer data")
+    parser.add_argument("--cond-x1",        action="store_true",             help="conditional the network on degraded images")
+    parser.add_argument("--add-x1-noise",   action="store_true",             help="add noise to conditional network")
 
     arg = parser.parse_args()
 
@@ -239,7 +316,7 @@ if __name__ == '__main__':
     opt.update(vars(arg))
 
     # one-time download: ADM checkpoint
-    download_ckpt("data/")
+    # download_ckpt("data/")
 
     set_seed(opt.seed)
 
