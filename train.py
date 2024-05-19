@@ -46,10 +46,11 @@ def create_training_options():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed",           type=int,   default=0)
     parser.add_argument("--name",           type=str,   default=None,        help="experiment ID")
+    parser.add_argument("--autoencoder_ckpt", type=Path, default=None)
     parser.add_argument("--ckpt",           type=str,   default=None,        help="resumed checkpoint name")
     parser.add_argument("--ckpt_path", type=Path, default=None)
     parser.add_argument("--gpu",            type=int,   default=None,        help="set only if you wish to run on a particular device")
-    parser.add_argument("--n-gpu-per-node", type=int,   default=1,           help="number of gpu on each node")
+    parser.add_argument("--n-gpu-per-node", type=int,   default=2,           help="number of gpu on each node")
     parser.add_argument("--master-address", type=str,   default='localhost', help="address for master")
     parser.add_argument("--node-rank",      type=int,   default=0,           help="the index of node")
     parser.add_argument("--num-proc-node",  type=int,   default=1,           help="The number of nodes in multi node env")
@@ -63,10 +64,10 @@ def create_training_options():
     parser.add_argument("--t0",             type=float, default=1e-4,        help="sigma start time in network parametrization")
     parser.add_argument("--T",              type=float, default=1.,          help="sigma end time in network parametrization")
     parser.add_argument("--interval",       type=int,   default=1000,        help="number of interval")
-    parser.add_argument("--beta-max",       type=float, default=0.3,         help="max diffusion for the diffusion model")
-    # parser.add_argument("--beta-min",       type=float, default=0.1)
-    parser.add_argument("--ot-ode",         action="store_true",             help="use OT-ODE model")
-    parser.add_argument("--clip-denoise",   action="store_true",             help="clamp predicted image to [-1,1] at each")
+    parser.add_argument("--beta_max",       type=float, default=0.3,         help="max diffusion for the diffusion model")
+    parser.add_argument("--beta_min",       type=float, default=0.1)
+    parser.add_argument("--ot_ode",         action="store_true",              help="use OT-ODE model")
+    parser.add_argument("--clip_denoise",   action="store_true",             help="clamp predicted image to [-1,1] at each")
 
     # optional configs for conditional network
     parser.add_argument("--cond-x1",        action="store_true",             help="conditional the network on degraded images")
@@ -109,7 +110,7 @@ def create_training_options():
     os.makedirs(opt.ckpt_path, exist_ok=True)
 
     if opt.ckpt is not None:
-        ckpt_file = opt.ckpt_path / opt.ckpt / "latest.pt"
+        ckpt_file = opt.ckpt_path / opt.ckpt 
         assert ckpt_file.exists()
         opt.load = ckpt_file
     else:
@@ -149,7 +150,7 @@ if __name__ == '__main__':
     opt = create_training_options()
 
     # one-time download: ADM checkpoint
-    download_ckpt("data/")
+    # download_ckpt("data/")
 
     if opt.distributed:
         size = opt.n_gpu_per_node

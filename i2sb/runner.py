@@ -19,8 +19,10 @@ from torch.optim import AdamW, lr_scheduler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from torch_ema import ExponentialMovingAverage
+import torchvision
 import torchvision.utils as tu
 
+from diffusers.models import AutoencoderKL
 
 import distributed_util as dist_util
 
@@ -102,13 +104,23 @@ class Runner(object):
         self.net = Image256Net(log, noise_levels=noise_levels, use_fp16=opt.use_fp16, cond=opt.cond_x1)
         self.ema = ExponentialMovingAverage(self.net.parameters(), decay=opt.ema)
 
+        self.resume_it = 0
+
         if opt.load:
             checkpoint = torch.load(opt.load, map_location="cpu")
             self.net.load_state_dict(checkpoint['net'])
             log.info(f"[Net] Loaded network ckpt: {opt.load}!")
             self.ema.load_state_dict(checkpoint["ema"])
             log.info(f"[Ema] Loaded ema ckpt: {opt.load}!")
+            # Set resume step
+            self.resume_it = int(os.path.splitext(os.path.basename(opt.load))[0])
 
+        model = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae", use_safetensors=False)
+        print("Loading autoencoder from checkpoint: ", opt.autoencoder_ckpt)
+        checkpoint = torch.load(opt.autoencoder_ckpt, map_location='cpu')
+        model.load_state_dict(checkpoint['model_state_dict'])
+        
+        self.vae = model.to(opt.device).eval()
         self.net.to(opt.device)
         self.ema.to(opt.device)
 
@@ -130,7 +142,7 @@ class Runner(object):
         """ Given network output, recover x0. This should be the inverse of Eq 12 """
         std_fwd = self.diffusion.get_std_fwd(step, xdim=xt.shape[1:])
         pred_x0 = xt - std_fwd * net_out
-        if clip_denoise: pred_x0.clamp_(-1., 1.)
+        # if clip_denoise: pred_x0.clamp_(-1., 1.)
         return pred_x0
 
     def sample_batch(self, opt, loader, corrupt_method):
@@ -177,11 +189,19 @@ class Runner(object):
 
         net.train()
         n_inner_loop = opt.batch_size // (opt.global_size * opt.microbatch)
-        for it, (x0_batch, x1_batch, _) in enumerate(train_dataset):
+
+        it = 0
+        if opt.ckpt is not None and it < self.resume_it:
+            it = self.resume_it + 1
+        for _, (x0_batch, x1_batch, _) in enumerate(train_dataset):
             optimizer.zero_grad()
 
             x0_batch = preprocess(x0_batch)
             x1_batch = preprocess(x1_batch)
+
+            with torch.no_grad():
+                x0_batch = self.encode_xflip_inv(x0_batch.to(opt.device))
+                x1_batch = self.encode_xflip_inv(x1_batch.to(opt.device))
 
             # Iterate over microbatches
             for i in range(n_inner_loop):
@@ -200,6 +220,7 @@ class Runner(object):
                 label = self.compute_label(step, x0, xt)
 
                 pred = net(xt, step, cond=cond)
+
                 assert xt.shape == label.shape == pred.shape
 
                 if mask is not None:
@@ -212,6 +233,11 @@ class Runner(object):
             # Update loss after micobatches have completed
             optimizer.step()
             ema.update()
+            it += 1
+
+            del x0_batch
+            del x1_batch
+            torch.cuda.empty_cache()
             if sched is not None: sched.step()
 
             # -------- logging --------
@@ -231,7 +257,7 @@ class Runner(object):
                         "ema": ema.state_dict(),
                         "optimizer": optimizer.state_dict(),
                         "sched": sched.state_dict() if sched is not None else sched,
-                    }, opt.ckpt_path / "latest.pt")
+                    }, opt.ckpt_path / f"{it}.pt")
                     log.info(f"Saved latest({it=}) checkpoint to {opt.ckpt_path=}!")
                 if opt.distributed:
                     torch.distributed.barrier()
@@ -241,6 +267,14 @@ class Runner(object):
                 self.evaluation(opt, it, train_dataset, val_dataset)
                 net.train()
         self.writer.close()
+
+    @torch.no_grad()
+    def encode_xflip_inv(self, x):
+        return 0.5 * (self.vae.encode(x).latent_dist.mode() + torch.flip(self.vae.encode(torch.flip(x, [-1])).latent_dist.mode(), [-1]))
+
+    @torch.no_grad()
+    def decode_xflip_inv(self, x):
+        return 0.5 * (self.vae.decode(x).sample + torch.flip(self.vae.decode(torch.flip(x, [-1])).sample, [-1]))
 
     @torch.no_grad()
     def ddpm_sampling(self, opt, x1, mask=None, cond=None, clip_denoise=False, nfe=None, log_count=10, verbose=True):
@@ -289,7 +323,7 @@ class Runner(object):
 
         # Generate training sample
         # ---------------------------------------
-        num_samples = 4
+        num_samples = 5
 
         test_batch, test_cond, _ = next(iter(val_dataset))
         batch_size = len(test_batch)
@@ -297,8 +331,13 @@ class Runner(object):
         if num_samples > batch_size:
             num_samples = batch_size
 
-        test_batch = preprocess(test_batch)
-        test_cond = preprocess(test_cond)
+        test_batch = preprocess(test_batch[0:num_samples])
+        test_cond = preprocess(test_cond[0:num_samples])
+
+        with torch.no_grad():
+            test_batch = self.encode_xflip_inv(test_batch.to(opt.device))
+            test_cond = self.encode_xflip_inv(test_cond.to(opt.device))
+
 
         img_clean = test_batch
         img_corrupt = test_cond
@@ -308,55 +347,54 @@ class Runner(object):
         x1 = img_corrupt
 
         xs, pred_x0s = self.ddpm_sampling(
-            opt, x1, mask=mask, cond=cond, clip_denoise=True, verbose=opt.global_rank==0
+            opt, x1, mask=mask, cond=cond, clip_denoise=False, verbose=opt.global_rank==0
         )
+
+        with torch.no_grad():
+            img_clean = self.decode_xflip_inv(img_clean)
+            img_corrupt = self.decode_xflip_inv(img_corrupt)
+            xs = self.decode_xflip_inv(xs[:, 0, ...].to(opt.device))
+            pred_x0s = self.decode_xflip_inv(pred_x0s[:, 0, ...].to(opt.device))
 
         log.info("Collecting tensors ...")
 
         img_clean   = all_cat_cpu(opt, log, img_clean)
         img_corrupt = all_cat_cpu(opt, log, img_corrupt)
         # y           = all_cat_cpu(opt, log, y)
-        xs          = all_cat_cpu(opt, log, xs)
+        img_recon   = all_cat_cpu(opt, log, xs)
         pred_x0s    = all_cat_cpu(opt, log, pred_x0s)
 
-        batch, len_t, *xdim = xs.shape
-        assert img_clean.shape == img_corrupt.shape == (batch, *xdim)
-        assert xs.shape == pred_x0s.shape
+        # batch, len_t, *xdim = xs.shape
+        # assert img_clean.shape == img_corrupt.shape == (batch, *xdim)
+        # assert xs.shape == pred_x0s.shape
         # assert y.shape == (batch,)
-        print(img_clean.shape)
-        print(img_corrupt.shape)
-        print(xs.shape)
-        print(pred_x0s.shape)
-
-        img_recon = xs[:, 0, ...]
-        pred_x0s = pred_x0s[:, 0,...]
 
         mae_T = RunningMean().to(opt.device)
         mse_T = RunningMean().to(opt.device)
-        ssim_T = ssim_measure(data_range=(-1,1))
+        ssim_T = ssim_measure(data_range=(-1,1)).to(opt.device)
         mse_T.update(torch.mean((img_recon.to(opt.device)-img_clean.to(opt.device))**2, dim=(1,2,3)))
         mae_T.update(torch.mean(torch.abs(img_recon.to(opt.device)-img_clean.to(opt.device)), dim=(1,2,3)))
-        ssim_T.update(img_recon, img_clean)
-        mse = mse_T.compute().item().detach().cpu()
-        mae = mae_T.compute().item().detach().cpu()
+        ssim_T.update(img_recon.to(opt.device), img_clean.to(opt.device))
+        mse = mse_T.compute().item()
+        mae = mae_T.compute().item()
         ssim_score = ssim_T.compute().item()
         print(f"MSE: {mse}, MAE: {mae}, SSIM: {ssim_score}")
 
         log.info(f"Generated recon trajectories: size={xs.shape}")
         log.info("Logging images ...")
-        img_clean = (img_clean[0]+1)/2.
-        img_clean = img_clean.permute(1,2,0).numpy()
-        img_corrupt = (img_corrupt[0]+1)/2.
-        img_corrupt = img_corrupt.permute(1,2,0).numpy()
-        img_recon = (img_recon[0]+1)/2.
-        img_recon = img_recon.permute(1,2,0).numpy()
-        pred_x0s = (pred_x0s[0]+1)/2.
-        pred_x0s = pred_x0s.permute(1,2,0).numpy()
-        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/clean_{}_{}_{}.png'.format(it, mae, ssim_score), img_clean)
-        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/currupt_{}_{}_{}.png'.format(it, mae, ssim_score), img_corrupt)
-        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/img_recon_{}_{}_{}.png'.format(it, mae, ssim_score), img_recon)
-        plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/pred_x0s_{}_{}_{}.png'.format(it, mae, ssim_score), pred_x0s)
-        # plt.imsave('/home/sszabados/models/I2SB/tmp_imgs/xs_{}_{}_{}.png'.format(it, mae, ssim_score), xs.reshape(-1, *xdim)[0].permute(1,2,0).numpy())
+
+        grid_img = torchvision.utils.make_grid(img_clean, nrow=num_samples, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, 'tmp_imgs/clean_{}_{}_{}.png'.format(it, mae, ssim_score))
+        grid_img = torchvision.utils.make_grid(img_corrupt, nrow=num_samples, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, 'tmp_imgs/currupt_{}_{}_{}.png'.format(it, mae, ssim_score))
+        grid_img = torchvision.utils.make_grid(img_recon, nrow=num_samples, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, 'tmp_imgs/img_recon_{}_{}_{}.png'.format(it, mae, ssim_score))
+        grid_img = torchvision.utils.make_grid(pred_x0s, nrow=num_samples, normalize=True, scale_each=True)
+        torchvision.utils.save_image(grid_img, 'tmp_imgs/pred_x0s_{}_{}_{}.png'.format(it, mae, ssim_score))
+   
+        del mae_T
+        del mse_T
+        del ssim_T
 
         # Compute FID, MSE, MAE, SSIM
         # ---------------------------------------

@@ -49,7 +49,7 @@ def create_argparser():
         batch_size=4,
         channel_mult='',
         class_cond=False,
-        clip_denoised=True,
+        clip_denoised=False,
         diffusion_steps=1000,
         dropout=0.0,
         image_size=256,

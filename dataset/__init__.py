@@ -192,88 +192,99 @@ def load_data(
     seed=42,
     num_workers=2,
 ):
-  # Compute batch size for this worker.
-  root = data_dir
+    # Compute batch size for this worker.
+    root = data_dir
       
-  if dataset == 'edges2handbags':
-    from .aligned_dataset import EdgesDataset
-    trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
-                                random_crop=True, random_flip=True)
-    valset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
-                                random_crop=False, random_flip=False)
-    if include_test:
-      testset = EdgesDataset(dataroot=root, train=False, img_size=image_size,
-                                random_crop=False, random_flip=False)
+    if dataset == 'edges2handbags':
+        from .aligned_dataset import EdgesDataset
+        trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
+                                    random_crop=True, random_flip=True)
+        valset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
+                                    random_crop=False, random_flip=False)
+        if include_test:
+            testset = EdgesDataset(dataroot=root, train=False, img_size=image_size,
+                                    random_crop=False, random_flip=False)
 
-  elif dataset == 'diode':
-    from .aligned_dataset import DIODE
-    trainset = DIODE(dataroot=root, train=True, img_size=image_size,
-                                random_crop=True, random_flip=True, disable_cache=True)
-    valset = DIODE(dataroot=root, train=True, img_size=image_size,
-                                random_crop=False, random_flip=False, disable_cache=True)
-    if include_test:
-      testset = DIODE(dataroot=root, train=False, img_size= image_size,
-                                random_crop=False, random_flip=False)
-      
-  elif dataset == 'fives':
-    from .aligned_dataset import CircDataset
-    trainset = CircDataset(dataroot=root, train=True, img_size=image_size,
-                            random_crop=False, random_flip=True, random_rotate=True)
-    valset = CircDataset(dataroot=root, train=True, img_size=image_size,
-                          random_crop=False, random_flip=False, random_rotate=True)
-    if include_test:
-       testset = CircDataset(dataroot=root, train=False, img_size=image_size,
-                          random_crop=False, random_flip=False, random_rotate=True)
-       
-  elif dataset == 'fives_patches':
-    from .aligned_dataset import EdgesDataset
-    trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
-                                random_crop=False, random_flip=False, random_rotate=True)
-    valset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
-                                random_crop=False, random_flip=False, random_rotate=True)
-    if include_test:
-      testset = EdgesDataset(dataroot=root, train=False, img_size=image_size,
-                                random_crop=False, random_flip=False, random_rotate=True)
+    elif dataset == 'diode':
+        from .aligned_dataset import DIODE
+        trainset = DIODE(dataroot=root, train=True, img_size=image_size,
+                                    random_crop=True, random_flip=True, disable_cache=True)
+        valset = DIODE(dataroot=root, train=True, img_size=image_size,
+                                    random_crop=False, random_flip=False, disable_cache=True)
+        if include_test:
+            testset = DIODE(dataroot=root, train=False, img_size= image_size,
+                                    random_crop=False, random_flip=False)
+        
+    elif dataset == 'fives':
+        from .aligned_dataset import CircDataset
+        trainset = CircDataset(dataroot=root, train=True, img_size=image_size,
+                                random_crop=False, random_flip=True, random_rotate=True)
+        valset = CircDataset(dataroot=root, train=True, img_size=image_size,
+                            random_crop=False, random_flip=False, random_rotate=True)
+        if include_test:
+            testset = CircDataset(dataroot=root, train=False, img_size=image_size,
+                            random_crop=False, random_flip=False, random_rotate=True)
+            
+    elif dataset == 'fives_patches':
+        from .aligned_dataset import EdgesDataset
+        trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
+                                    random_crop=False, random_flip=False, random_rotate=True)
+        valset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
+                                    random_crop=False, random_flip=False, random_rotate=True)
+        if include_test:
+            testset = EdgesDataset(dataroot=root, train=False, img_size=image_size,
+                                    random_crop=False, random_flip=False, random_rotate=True)
 
-  elif dataset == 'lysto64':
-    from .aligned_dataset import EdgesDataset
-    trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
-                                random_crop=False, random_flip=False, random_rotate=True)
-    valset = EdgesDataset(dataroot=root, train=False, img_size=image_size,
-                                random_crop=False, random_flip=False, random_rotate=True)
-    if include_test:
-      testset = EdgesDataset(dataroot=root, train=False, img_size=image_size,
-                                random_crop=False, random_flip=False, random_rotate=True)
+    elif dataset == 'lysto64':
+        from .aligned_dataset import EdgesDataset
+        trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
+                                    random_crop=False, random_flip=False, random_rotate=True)
+        valset = EdgesDataset(dataroot=root, train=False, img_size=image_size,
+                                    random_crop=False, random_flip=False, random_rotate=True)
+        if include_test:
+            testset = EdgesDataset(dataroot=root, train=False, img_size=image_size,
+                                    random_crop=False, random_flip=False, random_rotate=True)
+
+    elif dataset == 'ct_pet':
+        from .aligned_dataset import EdgesDataset
+        trainset = EdgesDataset(dataroot=root, train=True, img_size=image_size,
+                                    random_crop=False, random_flip=True)
+        valset = EdgesDataset(dataroot=root, train=False, img_size=image_size,
+                                    random_crop=False, random_flip=True)
+        if include_test:
+            testset = EdgesDataset(dataroot=root, train=False, img_size=image_size,
+                                    random_crop=False, random_flip=True)
 
 
-  loader = DataLoader(
-      dataset=trainset, num_workers=num_workers, pin_memory=True,
-      batch_sampler=DistInfiniteBatchSampler(
-          dataset_len=len(trainset), glb_batch_size=batch_size*dist.get_world_size(), seed=seed,
-          shuffle=not deterministic, filling=True, rank=dist.get_rank(), world_size=dist.get_world_size(),
-      )
-  )
+
+    loader = DataLoader(
+        dataset=trainset, num_workers=num_workers, pin_memory=True,
+        batch_sampler=DistInfiniteBatchSampler(
+            dataset_len=len(trainset), glb_batch_size=batch_size*dist.get_world_size(), seed=seed,
+            shuffle=not deterministic, filling=True, rank=dist.get_rank(), world_size=dist.get_world_size(),
+        )
+    )
   
-  num_tasks = dist.get_world_size()
-  global_rank = dist.get_rank()
-  sampler = torch.utils.data.DistributedSampler(
-          valset, num_replicas=num_tasks, rank=global_rank, shuffle=False, drop_last=False
-      )
-  val_loader = torch.utils.data.DataLoader(
-    valset, batch_size=batch_size,
-    sampler=sampler, num_workers=num_workers,  drop_last=False)
-  
-  if include_test:
-      
     num_tasks = dist.get_world_size()
     global_rank = dist.get_rank()
     sampler = torch.utils.data.DistributedSampler(
-            testset, num_replicas=num_tasks, rank=global_rank, shuffle=False, drop_last=False
+            valset, num_replicas=num_tasks, rank=global_rank, shuffle=False, drop_last=False
         )
-    test_loader = torch.utils.data.DataLoader(
-      testset, batch_size=batch_size,
-      sampler=sampler, num_workers=num_workers,  shuffle=False,drop_last=False)
+    val_loader = torch.utils.data.DataLoader(
+        valset, batch_size=batch_size,
+        sampler=sampler, num_workers=num_workers,  drop_last=False)
     
-    return loader, val_loader, test_loader
-  else:
-    return loader, val_loader
+    if include_test:
+        
+        num_tasks = dist.get_world_size()
+        global_rank = dist.get_rank()
+        sampler = torch.utils.data.DistributedSampler(
+                testset, num_replicas=num_tasks, rank=global_rank, shuffle=False, drop_last=False
+            )
+        test_loader = torch.utils.data.DataLoader(
+        testset, batch_size=batch_size,
+        sampler=sampler, num_workers=num_workers,  shuffle=False,drop_last=False)
+        
+        return loader, val_loader, test_loader
+    else:
+        return loader, val_loader
