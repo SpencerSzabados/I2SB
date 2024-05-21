@@ -18,7 +18,7 @@ dependencies:
   - imageio
   - matplotlib
   - tensorboard
-  - torchmetrics==0.9.3
+  - torchmetrics
   - pip
   - pip:
     - prefetch_generator

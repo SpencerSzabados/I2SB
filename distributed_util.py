@@ -10,13 +10,19 @@ import os
 import numpy as np
 import torch
 
+import socket
 import torch.distributed as dist
 from torch.multiprocessing import Process
+
+def find_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
 
 def init_processes(rank, size, fn, args):
     """ Initialize the distributed environment. """
     os.environ['MASTER_ADDR'] = args.master_address
-    os.environ['MASTER_PORT'] = '6020'
+    os.environ['MASTER_PORT'] = str(find_free_port())
     torch.cuda.set_device(args.local_rank)
     dist.init_process_group(backend='nccl', init_method='env://', rank=rank, world_size=size)
     fn(args)

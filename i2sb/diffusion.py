@@ -91,7 +91,8 @@ class Diffusion():
         steps = steps[::-1]
 
         pair_steps = zip(steps[1:], steps[:-1])
-        pair_steps = tqdm(pair_steps, desc='DDPM sampling', total=len(steps)-1) if verbose else pair_steps
+        # TODO: I removed this line to avoid creating large log files during sampling.
+        # pair_steps = tqdm(pair_steps, desc='DDPM sampling', total=len(steps)-1) if verbose else pair_steps
         for prev_step, step in pair_steps:
             assert prev_step < step, f"{prev_step=}, {step=}"
 
