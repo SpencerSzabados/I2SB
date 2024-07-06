@@ -184,77 +184,79 @@ class Runner(object):
         n_inner_loop = opt.batch_size // (opt.global_size * opt.microbatch)
 
         it = 0
-        if opt.ckpt is not None and it < self.resume_it:
-            it = self.resume_it + 1
-        for _, (x0_batch, x1_batch, _) in enumerate(train_dataset):
-            optimizer.zero_grad()
+        self.evaluation(opt, it, train_dataset, val_dataset)
 
-            x0_batch = preprocess(x0_batch)
-            x1_batch = preprocess(x1_batch)
+        # if opt.ckpt is not None and it < self.resume_it:
+        #     it = self.resume_it + 1
+        # for _, (x0_batch, x1_batch, _) in enumerate(train_dataset):
+        #     optimizer.zero_grad()
 
-            # Iterate over microbatches
-            for i in range(n_inner_loop):
-                # ===== sample boundary pair =====
-                # x0, x1, mask, y, cond = self.sample_batch(opt, train_loader, corrupt_method)
-                x0 = x0_batch[(i*opt.microbatch):(i*opt.microbatch+opt.microbatch)].to(opt.device)
-                x1 = x1_batch[(i*opt.microbatch):(i*opt.microbatch+opt.microbatch)].to(opt.device)
-                y = None
-                mask = None
-                cond = x1 if opt.cond_x1 else None
+        #     x0_batch = preprocess(x0_batch)
+        #     x1_batch = preprocess(x1_batch)
 
-                # ===== compute loss =====
-                step = torch.randint(0, opt.interval, (x0.shape[0],))
+        #     # Iterate over microbatches
+        #     for i in range(n_inner_loop):
+        #         # ===== sample boundary pair =====
+        #         # x0, x1, mask, y, cond = self.sample_batch(opt, train_loader, corrupt_method)
+        #         x0 = x0_batch[(i*opt.microbatch):(i*opt.microbatch+opt.microbatch)].to(opt.device)
+        #         x1 = x1_batch[(i*opt.microbatch):(i*opt.microbatch+opt.microbatch)].to(opt.device)
+        #         y = None
+        #         mask = None
+        #         cond = x1 if opt.cond_x1 else None
 
-                xt = self.diffusion.q_sample(step, x0, x1, ot_ode=opt.ot_ode)
-                label = self.compute_label(step, x0, xt)
+        #         # ===== compute loss =====
+        #         step = torch.randint(0, opt.interval, (x0.shape[0],))
 
-                pred = net(xt, step, cond=cond)
-                assert xt.shape == label.shape == pred.shape
+        #         xt = self.diffusion.q_sample(step, x0, x1, ot_ode=opt.ot_ode)
+        #         label = self.compute_label(step, x0, xt)
 
-                if mask is not None:
-                    pred = mask * pred
-                    label = mask * label
+        #         pred = net(xt, step, cond=cond)
+        #         assert xt.shape == label.shape == pred.shape
 
-                loss = F.mse_loss(pred, label)
-                loss.backward()
+        #         if mask is not None:
+        #             pred = mask * pred
+        #             label = mask * label
 
-            # Update loss after micobatches have completed
-            optimizer.step()
-            ema.update()
-            it += 1
+        #         loss = F.mse_loss(pred, label)
+        #         loss.backward()
 
-            del x0_batch
-            del x1_batch
-            torch.cuda.empty_cache()
-            if sched is not None: sched.step()
+        #     # Update loss after micobatches have completed
+        #     optimizer.step()
+        #     ema.update()
+        #     it += 1
 
-            # -------- logging --------
-            log.info("train_it {}/{} | lr:{} | loss:{}".format(
-                1+it,
-                opt.num_itr,
-                "{:.2e}".format(optimizer.param_groups[0]['lr']),
-                "{:+.4f}".format(loss.item()),
-            ))
-            if it % 10 == 0:
-                self.writer.add_scalar(it, 'loss', loss.detach())
+        #     del x0_batch
+        #     del x1_batch
+        #     torch.cuda.empty_cache()
+        #     if sched is not None: sched.step()
 
-            if it % 5000 == 0:
-                if opt.global_rank == 0:
-                    torch.save({
-                        "net": self.net.state_dict(),
-                        "ema": ema.state_dict(),
-                        "optimizer": optimizer.state_dict(),
-                        "sched": sched.state_dict() if sched is not None else sched,
-                    }, opt.ckpt_path / f"{it}.pt")
-                    log.info(f"Saved latest({it=}) checkpoint to {opt.ckpt_path=}!")
-                if opt.distributed:
-                    torch.distributed.barrier()
+        #     # -------- logging --------
+        #     log.info("train_it {}/{} | lr:{} | loss:{}".format(
+        #         1+it,
+        #         opt.num_itr,
+        #         "{:.2e}".format(optimizer.param_groups[0]['lr']),
+        #         "{:+.4f}".format(loss.item()),
+        #     ))
+        #     if it % 10 == 0:
+        #         self.writer.add_scalar(it, 'loss', loss.detach())
 
-            if it == 500 or (it > 0 and it % 5000 == 0): # 0, 0.5k, 3k, 6k 9k
-                net.eval()
-                self.evaluation(opt, it, train_dataset, val_dataset)
-                net.train()
-        self.writer.close()
+        #     if it % 5000 == 0:
+        #         if opt.global_rank == 0:
+        #             torch.save({
+        #                 "net": self.net.state_dict(),
+        #                 "ema": ema.state_dict(),
+        #                 "optimizer": optimizer.state_dict(),
+        #                 "sched": sched.state_dict() if sched is not None else sched,
+        #             }, opt.ckpt_path / f"{it}.pt")
+        #             log.info(f"Saved latest({it=}) checkpoint to {opt.ckpt_path=}!")
+        #         if opt.distributed:
+        #             torch.distributed.barrier()
+
+        #     if it == 500 or (it > 0 and it % 5000 == 0): # 0, 0.5k, 3k, 6k 9k
+        #         net.eval()
+        #         self.evaluation(opt, it, train_dataset, val_dataset)
+        #         net.train()
+        # self.writer.close()
 
     @torch.no_grad()
     def ddpm_sampling(self, opt, x1, mask=None, cond=None, clip_denoise=False, nfe=None, log_count=10, verbose=True):
@@ -298,110 +300,110 @@ class Runner(object):
     @torch.no_grad()
     def evaluation(self, opt, it, train_dataset, val_dataset):
 
-        log = self.log
-        log.info(f"========== Evaluating model : iter={it} ==========")
-        torch.cuda.empty_cache()
+        # log = self.log
+        # log.info(f"========== Evaluating model : iter={it} ==========")
+        # torch.cuda.empty_cache()
 
-        # Generate training sample
-        # ---------------------------------------
-        num_samples = 5
+        # # Generate training sample
+        # # ---------------------------------------
+        # num_samples = 5
 
-        test_batch, test_cond, _ = next(iter(val_dataset))
-        batch_size = len(test_batch)
+        # test_batch, test_cond, _ = next(iter(val_dataset))
+        # batch_size = len(test_batch)
 
-        if num_samples > batch_size:
-            num_samples = batch_size
+        # if num_samples > batch_size:
+        #     num_samples = batch_size
 
-        test_batch = preprocess(test_batch[0:num_samples])
-        test_cond = preprocess(test_cond[0:num_samples])
+        # test_batch = preprocess(test_batch[0:num_samples])
+        # test_cond = preprocess(test_cond[0:num_samples])
 
-        img_clean = test_batch
-        img_corrupt = test_cond
-        mask = None
-        y = None
-        cond = img_clean if opt.cond_x1 else None
-        x1 = img_corrupt
+        # img_clean = test_batch
+        # img_corrupt = test_cond
+        # mask = None
+        # y = None
+        # cond = img_clean if opt.cond_x1 else None
+        # x1 = img_corrupt
 
-        xs, pred_x0s = self.ddpm_sampling(
-            opt, x1, mask=mask, cond=cond, clip_denoise=True, verbose=opt.global_rank==0
-        )
+        # xs, pred_x0s = self.ddpm_sampling(
+        #     opt, x1, mask=mask, cond=cond, clip_denoise=True, verbose=opt.global_rank==0
+        # )
 
-        log.info("Collecting tensors ...")
+        # log.info("Collecting tensors ...")
 
-        img_clean   = all_cat_cpu(opt, log, img_clean)
-        img_corrupt = all_cat_cpu(opt, log, img_corrupt)
-        # y           = all_cat_cpu(opt, log, y)
-        xs          = all_cat_cpu(opt, log, xs)
-        pred_x0s    = all_cat_cpu(opt, log, pred_x0s)
+        # img_clean   = all_cat_cpu(opt, log, img_clean)
+        # img_corrupt = all_cat_cpu(opt, log, img_corrupt)
+        # # y           = all_cat_cpu(opt, log, y)
+        # xs          = all_cat_cpu(opt, log, xs)
+        # pred_x0s    = all_cat_cpu(opt, log, pred_x0s)
 
-        batch, len_t, *xdim = xs.shape
-        assert img_clean.shape == img_corrupt.shape == (batch, *xdim)
-        assert xs.shape == pred_x0s.shape
-        # assert y.shape == (batch,)
+        # batch, len_t, *xdim = xs.shape
+        # assert img_clean.shape == img_corrupt.shape == (batch, *xdim)
+        # assert xs.shape == pred_x0s.shape
+        # # assert y.shape == (batch,)
 
-        img_recon = xs[:, 0, ...]
-        pred_x0s = pred_x0s[:, 0,...]
+        # img_recon = xs[:, 0, ...]
+        # pred_x0s = pred_x0s[:, 0,...]
 
-        mae_T = RunningMean().to(opt.device)
-        mse_T = RunningMean().to(opt.device)
-        ssim_T = ssim_measure(data_range=(-1,1)).to(opt.device)
-        mse_T.update(torch.mean((img_recon.to(opt.device)-img_clean.to(opt.device))**2, dim=(1,2,3)))
-        mae_T.update(torch.mean(torch.abs(img_recon.to(opt.device)-img_clean.to(opt.device)), dim=(1,2,3)))
-        ssim_T.update(img_recon.to(opt.device), img_clean.to(opt.device))
-        mse = mse_T.compute().item()
-        mae = mae_T.compute().item()
-        ssim_score = ssim_T.compute().item()
-        print(f"MSE: {mse}, MAE: {mae}, SSIM: {ssim_score}")
+        # mae_T = RunningMean().to(opt.device)
+        # mse_T = RunningMean().to(opt.device)
+        # ssim_T = ssim_measure(data_range=(-1,1)).to(opt.device)
+        # mse_T.update(torch.mean((img_recon.to(opt.device)-img_clean.to(opt.device))**2, dim=(1,2,3)))
+        # mae_T.update(torch.mean(torch.abs(img_recon.to(opt.device)-img_clean.to(opt.device)), dim=(1,2,3)))
+        # ssim_T.update(img_recon.to(opt.device), img_clean.to(opt.device))
+        # mse = mse_T.compute().item()
+        # mae = mae_T.compute().item()
+        # ssim_score = ssim_T.compute().item()
+        # print(f"MSE: {mse}, MAE: {mae}, SSIM: {ssim_score}")
 
-        log.info(f"Generated recon trajectories: size={xs.shape}")
-        log.info("Logging images ...")
+        # log.info(f"Generated recon trajectories: size={xs.shape}")
+        # log.info("Logging images ...")
 
-        grid_img = torchvision.utils.make_grid(img_clean, nrow=num_samples, normalize=True, scale_each=True)
-        torchvision.utils.save_image(grid_img, 'tmp_imgs/clean_{}_{}_{}.png'.format(it, mae, ssim_score))
-        grid_img = torchvision.utils.make_grid(img_corrupt, nrow=num_samples, normalize=True, scale_each=True)
-        torchvision.utils.save_image(grid_img, 'tmp_imgs/currupt_{}_{}_{}.png'.format(it, mae, ssim_score))
-        grid_img = torchvision.utils.make_grid(img_recon, nrow=num_samples, normalize=True, scale_each=True)
-        torchvision.utils.save_image(grid_img, 'tmp_imgs/img_recon_{}_{}_{}.png'.format(it, mae, ssim_score))
-        grid_img = torchvision.utils.make_grid(pred_x0s, nrow=num_samples, normalize=True, scale_each=True)
-        torchvision.utils.save_image(grid_img, 'tmp_imgs/pred_x0s_{}_{}_{}.png'.format(it, mae, ssim_score))
+        # grid_img = torchvision.utils.make_grid(img_clean, nrow=num_samples, normalize=True, scale_each=True)
+        # torchvision.utils.save_image(grid_img, 'tmp_imgs/clean_{}_{}_{}.png'.format(it, mae, ssim_score))
+        # grid_img = torchvision.utils.make_grid(img_corrupt, nrow=num_samples, normalize=True, scale_each=True)
+        # torchvision.utils.save_image(grid_img, 'tmp_imgs/currupt_{}_{}_{}.png'.format(it, mae, ssim_score))
+        # grid_img = torchvision.utils.make_grid(img_recon, nrow=num_samples, normalize=True, scale_each=True)
+        # torchvision.utils.save_image(grid_img, 'tmp_imgs/img_recon_{}_{}_{}.png'.format(it, mae, ssim_score))
+        # grid_img = torchvision.utils.make_grid(pred_x0s, nrow=num_samples, normalize=True, scale_each=True)
+        # torchvision.utils.save_image(grid_img, 'tmp_imgs/pred_x0s_{}_{}_{}.png'.format(it, mae, ssim_score))
    
-        del mae_T
-        del mse_T
-        del ssim_T
+        # del mae_T
+        # del mse_T
+        # del ssim_T
 
-        # Compute FID, MSE, MAE, SSIM
-        # ---------------------------------------
-        print("Computing FID of model and L1 score")
-        # sample 50,000 images for computeing fid against train set
-        print("\nGenerating fid samples...", flush=True)
+        # # Compute FID, MSE, MAE, SSIM
+        # # ---------------------------------------
+        # print("Computing FID of model and L1 score")
+        # # sample 50,000 images for computeing fid against train set
+        # print("\nGenerating fid samples...", flush=True)
     
-        num_batches = 50000//len(train_dataset)
-        for _ in range(num_batches):
-            for i, (x1_batch, x0_batch, _) in enumerate(train_dataset):
-                x1_batch = preprocess(x1_batch)
-                x0_batch = preprocess(x0_batch)
-                xs, pred_x0s = self.ddpm_sampling(
-                    opt, x1_batch, mask=mask, cond=x0_batch, clip_denoise=True, verbose=opt.global_rank==0
-                )
-                xs = xs[:, 0, ...]
-                xs = (xs+1.)/2.
-                xs = xs.cpu().detach()
-                xs = xs.permute(0,2,3,1).numpy()
-                for j in range(len(xs)):
-                    plt.imsave('/u6/sszabado/checkpoints/i2sb/lysto64_random_crop_ddbm/fid_samples/image_{}_{}_{}.png'.format(i*opt.batch_size+j), xs[j]) # When generating multichannel data
-                    # plt.imsave('fid/{}/image_{}_{}_{}.JPEG'.format("fid_samples", i*batch_size+j), samples[j,:,:,0], cmap='gray') # When generating single channel data
-        print("\nfinished generating fid samples.", flush=True)
+        # num_batches = 50000//len(train_dataset)
+        # for _ in range(num_batches):
+        #     for i, (x1_batch, x0_batch, _) in enumerate(train_dataset):
+        #         x1_batch = preprocess(x1_batch)
+        #         x0_batch = preprocess(x0_batch)
+        #         xs, pred_x0s = self.ddpm_sampling(
+        #             opt, x1_batch, mask=mask, cond=x0_batch, clip_denoise=True, verbose=opt.global_rank==0
+        #         )
+        #         xs = xs[:, 0, ...]
+        #         xs = (xs+1.)/2.
+        #         xs = xs.cpu().detach()
+        #         xs = xs.permute(0,2,3,1).numpy()
+        #         for j in range(len(xs)):
+        #             plt.imsave('/u6/sszabado/checkpoints/i2sb/lysto64_random_crop_ddbm/fid_samples/image_{}_{}_{}.png'.format(i*opt.batch_size+j), xs[j]) # When generating multichannel data
+        #             # plt.imsave('fid/{}/image_{}_{}_{}.JPEG'.format("fid_samples", i*batch_size+j), samples[j,:,:,0], cmap='gray') # When generating single channel data
+        # print("\nfinished generating fid samples.", flush=True)
 
         print("\ncomputing fid...")
-        dir2ref = "/share/yaoliang/datasets/lysto64_random_crop_pix2pix/B/val"
-        dir2gen = "/u6/sszabado/checkpoints/i2sb/lysto64_random_crop_ddbm/fid_samples/"
+        dir2ref = "/ssd005/projects/watml/data/lysto64_random_crop_pix2pix/B/train/"
+        dir2gen = "/ssd005/projects/watml/szabados/checkpoints/I2SB/lysto64_random_crop/fid_samples/"
         fid_value = 0
         try:
             fid_value = calculate_fid_given_paths(
                 paths = [dir2ref, dir2gen],
                 batch_size = 128,
-                device = "cuda:1",
-                img_size = 256,
+                device = opt.device,
+                img_size = 64,
                 dims = 2048,
                 num_workers = 1,
                 eqv = 'D4' 
@@ -410,58 +412,58 @@ class Runner(object):
             fid_value = np.inf
         self.fids.append([it,fid_value])
         # Incrementally save fids after each epoch
-        os.makedirs('/u6/sszabado/checkpoints/i2sb/lysto64_random_crop_ddbm/metrics/', exist_ok=True)
-        np.save('/u6/sszabado/checkpoints/i2sb/lysto64_random_crop_ddbm/metrics/fid.npy', np.array(self.fids))
+        os.makedirs('/ssd005/projects/watml/szabados/checkpoints/I2SB/lysto64_random_crop/metrics/', exist_ok=True)
+        np.save('/ssd005/projects/watml/szabados/checkpoints/I2SB/lysto64_random_crop/metrics/fid.npy', np.array(self.fids))
         print(f"FID: {fid_value}")
 
-        print("Computing MSE, MSA, SSIM, loss...")
+        # print("Computing MSE, MSA, SSIM, loss...")
 
-        print(len(val_dataset))
+        # print(len(val_dataset))
 
-        ref_samples = []
-        samples = []
-        for i, (x1_batch, x0_batch, _) in enumerate(val_dataset):
-            x1_batch = preprocess(x1_batch)
-            x0_batch = preprocess(x0_batch)
-            xs, pred_x0s = self.ddpm_sampling(
-                    opt, x1_batch, mask=mask, cond=x0_batch, clip_denoise=True, verbose=opt.global_rank==0
-                )
-            xs = xs[:, 0, ...]
-            samples.append(all_cat_cpu(opt, log, xs))
-            ref_samples.append(all_cat_cpu(opt, log, x0_batch))
-            if i*opt.batch_size > 1500:
-                break
-        samples = torch.cat(samples, dim=0)
-        ref_samples = torch.cat(ref_samples, dim=0)
+        # ref_samples = []
+        # samples = []
+        # for i, (x1_batch, x0_batch, _) in enumerate(val_dataset):
+        #     x1_batch = preprocess(x1_batch)
+        #     x0_batch = preprocess(x0_batch)
+        #     xs, pred_x0s = self.ddpm_sampling(
+        #             opt, x1_batch, mask=mask, cond=x0_batch, clip_denoise=True, verbose=opt.global_rank==0
+        #         )
+        #     xs = xs[:, 0, ...]
+        #     samples.append(all_cat_cpu(opt, log, xs))
+        #     ref_samples.append(all_cat_cpu(opt, log, x0_batch))
+        #     if i*opt.batch_size > 1500:
+        #         break
+        # samples = torch.cat(samples, dim=0)
+        # ref_samples = torch.cat(ref_samples, dim=0)
 
-        mae_T = RunningMean()
-        mse_T = RunningMean()
-        ssim_T = ssim_measure(data_range=(-1,1))
-        # ssim_score = ssim_T(preds=samples, target=ref_samples).item()
-        samples_len = len(samples)
-        num_batches = samples_len//100
-        for i in range(0, num_batches):
-            s = i*100
-            e = min(s+100, samples_len)
-            mse_T.update(torch.mean((samples[s:e]-ref_samples[s:e])**2, dim=(1,2,3)))
-            mae_T.update(torch.mean(torch.abs(samples[s:e]-ref_samples[s:e]), dim=(1,2,3)))
-            ssim_T.update(samples[s:e], ref_samples[s:e])
-        mse = mse_T.compute().item()
-        mae = mae_T.compute().item()
-        ssim_score = ssim_T.compute().item()
+        # mae_T = RunningMean()
+        # mse_T = RunningMean()
+        # ssim_T = ssim_measure(data_range=(-1,1))
+        # # ssim_score = ssim_T(preds=samples, target=ref_samples).item()
+        # samples_len = len(samples)
+        # num_batches = samples_len//100
+        # for i in range(0, num_batches):
+        #     s = i*100
+        #     e = min(s+100, samples_len)
+        #     mse_T.update(torch.mean((samples[s:e]-ref_samples[s:e])**2, dim=(1,2,3)))
+        #     mae_T.update(torch.mean(torch.abs(samples[s:e]-ref_samples[s:e]), dim=(1,2,3)))
+        #     ssim_T.update(samples[s:e], ref_samples[s:e])
+        # mse = mse_T.compute().item()
+        # mae = mae_T.compute().item()
+        # ssim_score = ssim_T.compute().item()
         
-        self.MSE.append([it, mse])
-        self.MAE.append([it, mae])
-        self.SSIM.append([it, ssim_score])
-        os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
-        np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/mse.npy', np.array(self.MSE))
-        os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
-        np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/mae.npy', np.array(self.MAE))
-        os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
-        np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/ssim.npy', np.array(self.SSIM))
+        # self.MSE.append([it, mse])
+        # self.MAE.append([it, mae])
+        # self.SSIM.append([it, ssim_score])
+        # os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
+        # np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/mse.npy', np.array(self.MSE))
+        # os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
+        # np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/mae.npy', np.array(self.MAE))
+        # os.makedirs('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/', exist_ok=True)
+        # np.save('/home/sszabados/checkpoints/i2sb/lysto64_random_crop/metrics/ssim.npy', np.array(self.SSIM))
 
-        print(f"MSE: {mse}, MAE: {mae}, SSIM: {ssim_score}")
+        # print(f"MSE: {mse}, MAE: {mae}, SSIM: {ssim_score}")
 
 
-        log.info(f"========== Evaluation finished: iter={it} ==========")
-        torch.cuda.empty_cache()
+        # log.info(f"========== Evaluation finished: iter={it} ==========")
+        # torch.cuda.empty_cache()
